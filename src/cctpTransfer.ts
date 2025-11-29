@@ -10,8 +10,9 @@ import { wormhole, CircleTransfer, Network, Wormhole } from "@wormhole-foundatio
 import evm from "@wormhole-foundation/sdk/evm";
 import aptos from "@wormhole-foundation/sdk/aptos";
 import { config } from "./config";
-import { getEvmSigner, getAptosSigner } from "./helper";
+import { getEvmSigner, getAptosSigner, toEvmSdkSigner, toAptosSdkSigner } from "./helper";
 import { TransferResult } from "./types";
+
 
 export interface CctpTransferRequest {
   amount: string; // Amount in USDC (e.g., "1.0")
@@ -31,10 +32,13 @@ export async function transferUsdcViaCctp(
     
     console.log(`🔑 Initializing Wormhole SDK with ${network} network...`);
     
+    // For testnet, use "BaseSepolia" chain name; for mainnet use "Base"
+    const srcChainName = network === "Testnet" ? "BaseSepolia" : "Base";
+    
     // Initialize Wormhole SDK with EVM and Aptos platforms
     const wh = await wormhole(network, [evm, aptos], {
       chains: {
-        Base: {
+        [srcChainName]: {
           rpc: config.baseRpcUrl,
         },
         Aptos: {
@@ -53,8 +57,8 @@ export async function transferUsdcViaCctp(
     console.log(`✅ Base signer: ${baseSigner.address}`);
     console.log(`✅ Aptos signer: ${aptosSigner.address}`);
 
-    // Get chain contexts
-    const srcChain = wh.getChain("Base");
+    // Get chain contexts (srcChainName already defined above)
+    const srcChain = wh.getChain(srcChainName);
     const dstChain = wh.getChain("Aptos");
 
     // Parse amount - USDC has 6 decimals
@@ -68,10 +72,9 @@ export async function transferUsdcViaCctp(
     // Create Circle CCTP transfer
     console.log(`🚀 Starting CCTP Transfer...`);
     
-    // Create ChainAddress objects - the SDK expects these to be in ChainAddress format
-    // Using chainAddress method from chain context or Wormhole static method
-    const senderAddress = srcChain.chainAddress(baseSigner.address);
-    const receiverAddress = dstChain.chainAddress(recipientAddress);
+    // Create ChainAddress objects using Wormhole static method
+    const senderAddress = Wormhole.chainAddress(srcChainName, baseSigner.address);
+    const receiverAddress = Wormhole.chainAddress("Aptos", recipientAddress);
     
     const circleTransfer = await wh.circleTransfer(
       amountBigInt,
@@ -79,72 +82,60 @@ export async function transferUsdcViaCctp(
       receiverAddress,
       false, // manual mode (not automatic)
       undefined, // no payload
-      0 // no native gas
+      0n // no native gas (BigInt literal as per user instruction)
     );
 
     // Get transfer quote (optional, for informational purposes)
-    const quote = await CircleTransfer.quoteTransfer(
-      srcChain.chain,
-      dstChain.chain,
-      circleTransfer.transfer
-    );
-    console.log(`📊 Transfer quote:`, quote);
+    try {
+      const quote = await CircleTransfer.quoteTransfer(
+        srcChain.chain,
+        dstChain.chain,
+        circleTransfer.transfer
+      );
+      console.log(`📊 Transfer quote:`, quote);
+    } catch (quoteError: any) {
+      console.log(`⚠️  Could not get transfer quote (non-critical):`, quoteError.message);
+      // Continue anyway - quote is optional
+    }
 
     // Step 1: Initiate transfer on Base Sepolia
     console.log(`📤 Initiating transfer on Base Sepolia...`);
-    const srcTxids = await circleTransfer.initiateTransfer(baseSigner.signer);
+    // Wrap EVM signer into SDK Signer wrapper
+    const baseSdkSigner = await toEvmSdkSigner(baseSigner.signer);
+    const srcTxids = await circleTransfer.initiateTransfer(baseSdkSigner);
     const sourceTx = Array.isArray(srcTxids) ? srcTxids[0] : srcTxids;
     console.log(`✅ Sent Base transaction: ${sourceTx}`);
 
     // Step 2: Wait for Circle attestation
     console.log(`🕒 Waiting for Circle attestation (this may take 1-3 minutes)...`);
     
-    // Poll for attestation with exponential backoff (max 3 minutes = 180000ms)
-    let delay = 2000; // Start with 2 seconds
-    const maxTimeout = 180_000; // 3 minutes total
-    const startTime = Date.now();
+    // Fetch attestation with 180 second timeout (per user instruction)
     let attestationIds: string[] | undefined;
-
-    while (Date.now() - startTime < maxTimeout) {
-      try {
-        attestationIds = await circleTransfer.fetchAttestation(10000); // 10 second timeout per attempt
-        if (attestationIds && attestationIds.length > 0) {
-          console.log(`📜 Attestation received: ${attestationIds[0]}`);
-          break;
-        }
-      } catch (error: any) {
-        const elapsed = Date.now() - startTime;
-        const remaining = maxTimeout - elapsed;
-        
-        if (remaining <= 0) {
-          throw new Error(
-            `Attestation not received after ${Math.floor(maxTimeout / 1000)} seconds. ` +
-            `This can happen if Circle's attestation service is slow. ` +
-            `Please check the transaction on Base Sepolia explorer and try again later.`
-          );
-        }
-
-        // Check if it's just a timeout (attestation not ready yet)
-        if (error.message?.includes('timeout') || error.message?.includes('not found')) {
-          console.log(`⏳ Attestation not ready yet, waiting ${delay / 1000}s (elapsed: ${Math.floor(elapsed / 1000)}s)...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          delay = Math.min(delay * 1.5, 30000); // Max 30 seconds between attempts
-        } else {
-          throw error;
-        }
+    try {
+      attestationIds = await circleTransfer.fetchAttestation(180000); // 180 seconds timeout
+      if (attestationIds && attestationIds.length > 0) {
+        console.log(`📜 Attestation received: ${attestationIds[0]}`);
+      } else {
+        throw new Error('Attestation not received after timeout');
       }
-    }
-
-    if (!attestationIds || attestationIds.length === 0) {
+    } catch (error: any) {
       throw new Error(
-        `Attestation not received after ${Math.floor(maxTimeout / 1000)} seconds. ` +
-        `Please check the transaction on Base Sepolia explorer and try again later.`
+        `Attestation not received after 180 seconds. ` +
+        `This can happen if Circle's attestation service is slow. ` +
+        `Please check the transaction on Base Sepolia explorer and try again later. ` +
+        `Error: ${error.message}`
       );
     }
 
     // Step 3: Complete transfer on Aptos
     console.log(`💸 Completing transfer on Aptos...`);
-    const dstTxids = await circleTransfer.completeTransfer(aptosSigner.account);
+    // Wrap Aptos account into SDK Signer wrapper
+    const aptosSdkSigner = toAptosSdkSigner(
+      aptosSigner.account,
+      aptosSigner.client,
+      "Aptos"
+    );
+    const dstTxids = await circleTransfer.completeTransfer(aptosSdkSigner);
     const destinationTx = Array.isArray(dstTxids) ? dstTxids[0] : dstTxids;
     console.log(`✅ Completed Aptos transaction: ${destinationTx}`);
 
