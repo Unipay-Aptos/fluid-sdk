@@ -1,0 +1,36 @@
+{
+  "name": "cctp-wormhole-transfer",
+  "version": "1.0.0",
+  "description": "Cross-chain USDC transfer from Base to Aptos using Wormhole and Circle CCTP",
+  "type": "module",
+  "main": "dist/runTransfer.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node --loader ts-node/esm src/runTransfer.ts",
+    "dev": "tsx src/runTransfer.ts"
+  },
+  "keywords": [
+    "cctp",
+    "wormhole",
+    "cross-chain",
+    "usdc",
+    "base",
+    "aptos"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@aptos-labs/ts-sdk": "^1.8.0",
+    "@circle-fin/provider-cctp-v2": "^1.0.4",
+    "@solana/web3.js": "1.87.6",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "patch-package": "^8.0.1",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
