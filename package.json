@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "description": "Cross-chain USDC transfer from Base to Aptos using Wormhole and Circle CCTP",
   "type": "module",
-  "main": "dist/runTransfer.js",
+  "main": "dist/runCctp.js",
   "scripts": {
     "build": "tsc",
-    "start": "node --loader ts-node/esm src/runTransfer.ts",
-    "dev": "tsx src/runTransfer.ts"
+    "start": "tsx src/runCctp.ts",
+    "dev": "tsx src/runCctp.ts",
+    "transfer": "tsx src/runCctp.ts"
   },
   "keywords": [
     "cctp",
@@ -34,7 +35,6 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "patch-package": "^8.0.1",
     "ts-node": "^10.9.2",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"

@@ -100,6 +100,11 @@ export async function transferUsdcViaCctp(
 
     // Step 1: Initiate transfer on Base Sepolia
     console.log(`📤 Initiating transfer on Base Sepolia...`);
+    
+    // Refresh nonce to ensure we have the latest from network
+    const currentNonce = await baseSigner.provider.getTransactionCount(baseSigner.address, 'pending');
+    console.log(`📊 Current wallet nonce: ${currentNonce}`);
+    
     // Wrap EVM signer into SDK Signer wrapper
     const baseSdkSigner = await toEvmSdkSigner(baseSigner.signer);
     const srcTxids = await circleTransfer.initiateTransfer(baseSdkSigner);

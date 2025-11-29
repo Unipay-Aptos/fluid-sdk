@@ -1,20 +1,24 @@
-# Cross-Chain USDC Transfer: Base Sepolia → Aptos
+# Cross-Chain USDC Transfer: Base Sepolia → Aptos via Circle CCTP
 
-A Node.js + TypeScript backend service for transferring USDC from Base Sepolia (EVM) to Aptos (Move) using the Wormhole Token Bridge protocol.
+A Node.js + TypeScript backend service for transferring USDC from **Base Sepolia (EVM)** to **Aptos (Move)** using **Circle CCTP (Cross-Chain Transfer Protocol)** via the **Wormhole SDK**. This is the same method that Portal Bridge uses and is the only method that works for Base Sepolia → Aptos transfers.
 
 ## Overview
 
 This project implements a complete cross-chain transfer flow where:
 - **Source Chain**: Base Sepolia (EVM-compatible)
 - **Destination Chain**: Aptos (Move-based)
-- **Protocol**: Wormhole Token Bridge
+- **Protocol**: Circle CCTP via Wormhole SDK
 - **Token**: USDC (6 decimals)
 
 The service uses sponsor wallets to pay all gas fees, so users don't need to sign any on-chain transactions.
 
+## Why CCTP?
+
+**Important**: The traditional Wormhole Token Bridge (message_type = 1) does **NOT** work for Base Sepolia → Aptos transfers. Portal Bridge UI succeeds only because it uses Circle CCTP → Wormhole Attestation → Aptos completion. This implementation replicates that exact flow.
+
 ## Architecture
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed system architecture and data flow diagrams.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed system architecture, data flow diagrams, and component descriptions.
 
 ## Quick Start
 
@@ -32,49 +36,52 @@ npm install
 
 ### Configuration
 
-Create a `.env.local` file:
+Create a `.env.local` or `.env` file:
 
 ```env
-# Base Sepolia Testnet
+# REQUIRED: Base Sepolia Testnet
 BASE_RPC_URL=https://sepolia.base.org
-BASE_SPONSOR_PRIVATE_KEY=0x...
+BASE_SPONSOR_PRIVATE_KEY=0x...your_private_key_here...
 
-# Aptos Testnet
+# REQUIRED: Aptos Testnet  
 APTOS_RPC_URL=https://fullnode.testnet.aptoslabs.com/v1
-APTOS_SPONSOR_PRIVATE_KEY=ed25519-priv-0x...
+APTOS_SPONSOR_PRIVATE_KEY=ed25519-priv-0x...your_private_key_here...
 
-# Network Type
+# REQUIRED: Network Type
 NETWORK_TYPE=Testnet
-
-# Aptos Token Bridge (required)
-APTOS_TOKEN_BRIDGE_ADDRESS=0x576410486a2da45eee6c949c995670112ddf2fbeedab20350d506328eefc9d4f
-
-# Aptos USDC Coin Type (required)
-APTOS_USDC_COIN_TYPE=0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832::usdc::USDC
 ```
+
+**Note**: Contract addresses are automatically handled by the Wormhole SDK. No manual configuration needed.
 
 ### Run Transfer
 
 ```bash
-npx tsx src/runTransferWormhole.ts
+# Transfer 1.0 USDC (uses sponsor wallet as recipient)
+npx tsx src/runCctp.ts --amount 1.0
+
+# Transfer 0.5 USDC to a specific Aptos address
+npx tsx src/runCctp.ts --amount 0.5 --to 0xc3e2a21da9f68dcd3ad8668c8fb72ede9f46fea67652fbffa9db8f8af0c612cf
 ```
 
 ## How It Works
 
-1. **Base Sepolia Transfer**
-   - Approves USDC to Wormhole Token Bridge
-   - Calls `transferTokens()` to lock USDC
-   - Gets sequence number from transaction event
+1. **Initiate Transfer on Base Sepolia**
+   - SDK creates CircleTransfer object via Wormhole SDK
+   - Calls Circle TokenMessenger contract
+   - Burns/locks USDC on Base Sepolia
+   - MessageTransmitter sends message to Circle
 
-2. **VAA Generation**
-   - Wormhole guardians observe the transfer
-   - Generate VAA (Verified Action Approval) via multi-sig
-   - Typically takes 1-2 minutes
+2. **Circle Attestation**
+   - Circle observes the transfer event
+   - Generates cryptographically signed attestation
+   - Typically available within 1-3 minutes
+   - SDK polls Circle Attestation API automatically
 
-3. **Aptos Completion**
-   - Polls Wormhole API for VAA
-   - Submits VAA to Aptos Token Bridge
-   - Token Bridge verifies and mints/releases USDC
+3. **Complete Transfer on Aptos**
+   - SDK retrieves Circle attestation
+   - Calls Circle CCTP contracts on Aptos
+   - Verifies attestation and mints/releases USDC
+   - USDC appears in recipient's Aptos wallet
 
 ## Project Structure
 
@@ -82,49 +89,70 @@ npx tsx src/runTransferWormhole.ts
 src/
 ├── config.ts                 # Environment configuration
 ├── types.ts                  # TypeScript interfaces
-├── helper.ts                 # Signer creation utilities
-├── wormholeContracts.ts      # Contract addresses & ABIs
-├── wormholeBase.ts           # Base Sepolia transfer logic
-├── wormholeVaa.ts            # VAA retrieval from guardians
-├── aptosIntegration.ts       # Aptos Token Bridge integration
-├── transferWormholeOnly.ts  # Main orchestration
-└── runTransferWormhole.ts    # Entry point
+├── helper.ts                 # Signer creation & SDK wrapping utilities
+│   ├── getEvmSigner()        # Creates raw EVM signer
+│   ├── getAptosSigner()      # Creates raw Aptos signer
+│   ├── toEvmSdkSigner()      # Wraps EVM signer for SDK
+│   └── toAptosSdkSigner()    # Wraps Aptos signer for SDK
+├── cctpTransfer.ts           # Main CCTP transfer logic
+│   └── transferUsdcViaCctp() # Complete CCTP flow
+└── runCctp.ts                # CLI entry point
 ```
 
 ## Key Features
 
+- ✅ **Circle CCTP Integration**: Uses Circle's Cross-Chain Transfer Protocol
+- ✅ **Wormhole SDK**: Leverages official Wormhole SDK for CCTP support
 - ✅ **Sponsor Wallet Model**: All gas fees paid by sponsor wallets
-- ✅ **Error Handling**: Comprehensive checks for balances, approvals, and network issues
-- ✅ **VAA Polling**: Automatic retry with exponential backoff
-- ✅ **Real Move Integration**: Uses actual Wormhole Move contracts from `/aptos`
+- ✅ **Automatic Attestation Polling**: SDK handles Circle attestation retrieval
+- ✅ **Error Handling**: Comprehensive checks and clear error messages
 - ✅ **Type Safety**: Full TypeScript implementation
+
+## Technology Stack
+
+- **Wormhole SDK**: `@wormhole-foundation/sdk` v4.0.2
+- **EVM SDK**: `@wormhole-foundation/sdk-evm` v4.0.2
+- **Aptos SDK**: `@wormhole-foundation/sdk-aptos` v4.0.2
+- **CCTP SDKs**: `@wormhole-foundation/sdk-evm-cctp` & `@wormhole-foundation/sdk-aptos-cctp` v4.0.2
+- **ethers.js**: v6.9.0 - EVM blockchain interactions
+- **@aptos-labs/ts-sdk**: v1.8.0 - Aptos blockchain interactions
 
 ## Contract Addresses
 
-### Base Sepolia Testnet
-- **Token Bridge**: `0x86F55A04690fd7815A3D802bD587e83eA888B239`
-- **Core**: `0x79A1027a6A159502049F10906D333EC57E95F083`
-- **USDC**: `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (verify)
+Contract addresses are automatically managed by the Wormhole SDK. The SDK uses the correct Circle CCTP contracts for testnet/mainnet without manual configuration.
 
-### Aptos Testnet
-- **Token Bridge**: `0x576410486a2da45eee6c949c995670112ddf2fbeedab20350d506328eefc9d4f`
-- **USDC Coin Type**: `0x69091fbab5f7d635ee7ac5098cf0c1efbe31d68fec0f2cd565e8d168daf52832::usdc::USDC`
+### Chain IDs
+- **Base Sepolia**: Wormhole Chain ID 30
+- **Aptos**: Wormhole Chain ID 22
+
+## Documentation
+
+- **Architecture**: [ARCHITECTURE.md](./ARCHITECTURE.md) - Detailed system design
+- **Setup Guide**: [CCTP_SETUP.md](./CCTP_SETUP.md) - Configuration instructions
+- **Testing Guide**: [TESTING_GUIDE.md](./TESTING_GUIDE.md) - Comprehensive testing instructions
 
 ## Troubleshooting
 
+### "Missing required environment variable"
+- Ensure your `.env.local` or `.env` file contains all required variables
+- See [CCTP_SETUP.md](./CCTP_SETUP.md) for the complete list
+
 ### "Insufficient ETH for gas fees"
-- Get Base Sepolia ETH from: https://www.coinbase.com/faucets/base-ethereum-goerli-faucet
+- Get Base Sepolia ETH from: https://www.coinbase.com/faucets/base-ethereum-sepolia-faucet
 
 ### "Insufficient USDC balance"
-- You need testnet USDC on Base Sepolia
+- You need testnet USDC on Base Sepolia to transfer
 
-### "VAA not ready after X retries"
-- VAA generation typically takes 1-2 minutes
-- Check transaction on Wormhole Scan: https://testnet.wormholescan.io
+### "Insufficient APT for gas fees"
+- Get Aptos testnet APT from: https://faucet.devnet.aptoslabs.com/
 
-### "Could not find TransferTokens event"
-- The code will fall back to querying VAA by transaction hash
-- This is normal and will still work
+### "Attestation not received after 180 seconds"
+- Circle's attestation service can sometimes be slow (up to 5-10 minutes)
+- Check the Base Sepolia transaction on the explorer
+- If the source transaction is confirmed, the attestation should eventually appear
+- Try running the transfer again after a few minutes
+
+For more troubleshooting tips, see [TESTING_GUIDE.md](./TESTING_GUIDE.md).
 
 ## Development
 
@@ -139,6 +167,16 @@ npm run build
 ```bash
 npx tsc --noEmit
 ```
+
+## Key Differences from TokenBridge
+
+| Aspect | TokenBridge (Old) | CCTP (Current) |
+|--------|-------------------|----------------|
+| **Protocol** | Wormhole Token Bridge | Circle CCTP via Wormhole |
+| **Message Type** | VAA (Verified Action Approval) | Circle Attestation |
+| **Base Sepolia → Aptos** | ❌ Not supported | ✅ Supported |
+| **Attestation Source** | Wormhole Guardians | Circle Infrastructure |
+| **Speed** | 1-2 minutes | 1-3 minutes |
 
 ## License
 
